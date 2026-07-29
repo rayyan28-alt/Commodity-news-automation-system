@@ -78,7 +78,8 @@ def check_economic_calendar():
         keywords = ["EIA", "Crude Oil Stocks", "Natural Gas Storage", "CPI", "Fed Interest Rate", "Nonfarm Payrolls", "FOMC"]
         for entry in feed.entries[:5]:
             title = entry.title
-            if any(kw.lower() in title.lower() for kw.lower() in keywords):
+            # FIXED SYNTAX HERE: using 'for kw in keywords' instead of 'for kw.lower() in keywords'
+            if any(kw.lower() in title.lower() for kw in keywords):
                 send_calendar_alert(title, getattr(entry, 'published', 'Today'))
     except Exception as e:
         print(f"Error checking Economic Calendar: {e}")
