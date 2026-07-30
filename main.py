@@ -18,7 +18,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 if not GEMINI_KEY:
     raise ValueError("Missing GEMINI_API_KEY in GitHub Secrets!")
 
-# Initialize Gemini Client
+# Initialize Gemini Client using google-genai
 client = genai.Client(api_key=GEMINI_KEY)
 
 # Initialize Finnhub client if API key exists
@@ -59,7 +59,7 @@ def fetch_finnhub_news():
     articles = []
     try:
         news_data = finnhub_client.general_news("general", min_id=0)
-        for item in news_data[:3]:  # Top 3 breaking items to save API quota
+        for item in news_data[:3]:  # Limit to 3 to keep within free quotas
             articles.append(
                 {
                     "title": item.get("headline", ""),
@@ -170,7 +170,7 @@ def run_pipeline():
     for feed_url in RSS_FEEDS:
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:2]:  # Limit to 2 per feed to avoid quota caps
+            for entry in feed.entries[:2]:  # Limit to top 2 items per RSS feed
                 all_news.append(
                     {
                         "title": entry.title,
@@ -190,9 +190,9 @@ def run_pipeline():
         prompt = f"Source: {source}\nTitle: {title}\nSummary: {summary}"
 
         try:
-            # Using stable gemini-1.5-flash model endpoint
+            # Active stable model string for google-genai SDK
             response = client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
@@ -209,8 +209,8 @@ def run_pipeline():
         except Exception as e:
             print(f"❌ Error processing item '{title}': {e}")
 
-        # Pause 5 seconds between requests to maintain 12 RPM max
-        time.sleep(5)
+        # Pause 6 seconds to stay safely within free rate limits
+        time.sleep(6)
 
 
 if __name__ == "__main__":
