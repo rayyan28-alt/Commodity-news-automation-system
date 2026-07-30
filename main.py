@@ -18,7 +18,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 if not GEMINI_KEY:
     raise ValueError("Missing GEMINI_API_KEY in GitHub Secrets!")
 
-# Initialize Gemini Client using google-genai
+# Initialize Gemini Client
 client = genai.Client(api_key=GEMINI_KEY)
 
 # Initialize Finnhub client if API key exists
@@ -59,7 +59,7 @@ def fetch_finnhub_news():
     articles = []
     try:
         news_data = finnhub_client.general_news("general", min_id=0)
-        for item in news_data[:5]:  # Fetch top 5 breaking items
+        for item in news_data[:3]:  # Top 3 breaking items to save API quota
             articles.append(
                 {
                     "title": item.get("headline", ""),
@@ -85,7 +85,7 @@ def check_economic_calendar():
             "Nonfarm Payrolls",
             "FOMC",
         ]
-        for entry in feed.entries[:5]:
+        for entry in feed.entries[:3]:
             title = entry.title
             if any(kw.lower() in title.lower() for kw in keywords):
                 send_calendar_alert(
@@ -170,7 +170,7 @@ def run_pipeline():
     for feed_url in RSS_FEEDS:
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:3]:
+            for entry in feed.entries[:2]:  # Limit to 2 per feed to avoid quota caps
                 all_news.append(
                     {
                         "title": entry.title,
@@ -190,9 +190,9 @@ def run_pipeline():
         prompt = f"Source: {source}\nTitle: {title}\nSummary: {summary}"
 
         try:
-            # Using google-genai structured JSON config
+            # Using stable gemini-1.5-flash model endpoint
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-1.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
@@ -204,13 +204,13 @@ def run_pipeline():
 
             # Dispatch alert to Telegram
             send_news_alert(title, source, ai_eval)
-            print(f"Successfully processed & sent: {title}")
+            print(f"✅ Successfully processed & sent: {title}")
 
         except Exception as e:
-            print(f"Error processing item '{title}': {e}")
+            print(f"❌ Error processing item '{title}': {e}")
 
-        # 12-second delay to strictly respect 5 requests/min rate limit (429 prevention)
-        time.sleep(12)
+        # Pause 5 seconds between requests to maintain 12 RPM max
+        time.sleep(5)
 
 
 if __name__ == "__main__":
