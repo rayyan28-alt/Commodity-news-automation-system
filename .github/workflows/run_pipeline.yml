@@ -2,8 +2,8 @@ name: Commodity News Automation
 
 on:
   schedule:
-    - cron: '*/10 * * * *'  # Runs automatically every 10 minutes
-  workflow_dispatch:        # Allows manual execution anytime from Actions tab
+    - cron: '*/30 * * * *'  # Runs automatically every 30 minutes to preserve free API limits
+  workflow_dispatch:        # Allows manual execution anytime from the Actions tab
 
 jobs:
   run-news-check:
