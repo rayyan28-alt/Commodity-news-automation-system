@@ -5,6 +5,7 @@ import feedparser
 import finnhub
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 import requests
 
 # ---------------------------------------------------------
@@ -18,7 +19,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 if not GEMINI_KEY:
     raise ValueError("Missing GEMINI_API_KEY in GitHub Secrets!")
 
-# Initialize Gemini Client using google-genai
+# Initialize Gemini Client
 client = genai.Client(api_key=GEMINI_KEY)
 
 # Initialize Finnhub client if API key exists
@@ -41,7 +42,6 @@ Return strictly JSON following this structure:
 
 RSS_FEEDS = [
     "https://www.investing.com/rss/news_11.rss",  # Commodities News
-    "https://www.investing.com/rss/news_14.rss",  # Forex/Macro
 ]
 
 CALENDAR_RSS = "https://www.investing.com/rss/forex_EconomicCalendar.rss"
@@ -59,7 +59,8 @@ def fetch_finnhub_news():
     articles = []
     try:
         news_data = finnhub_client.general_news("general", min_id=0)
-        for item in news_data[:3]:  # Limit to 3 to keep within free quotas
+        # Grab only the single newest article to conserve API quota
+        for item in news_data[:1]:
             articles.append(
                 {
                     "title": item.get("headline", ""),
@@ -85,7 +86,7 @@ def check_economic_calendar():
             "Nonfarm Payrolls",
             "FOMC",
         ]
-        for entry in feed.entries[:3]:
+        for entry in feed.entries[:2]:
             title = entry.title
             if any(kw.lower() in title.lower() for kw in keywords):
                 send_calendar_alert(
@@ -158,19 +159,50 @@ def send_news_alert(title, source, data):
 
 
 # ---------------------------------------------------------
-# 4. MAIN PIPELINE EXECUTION
+# 4. MAIN PIPELINE EXECUTION WITH AUTO-RETRY
 # ---------------------------------------------------------
+def generate_with_retry(prompt, retries=3):
+    """Calls Gemini API with exponential backoff on 429 quota limits."""
+    # List of fallback models to try if quota is exceeded
+    models_to_try = ["gemini-2.5-flash-lite", "gemini-1.5-flash", "gemini-2.5-flash"]
+    
+    for model_id in models_to_try:
+        for attempt in range(retries):
+            try:
+                response = client.models.generate_content(
+                    model=model_id,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION,
+                        response_mime_type="application/json",
+                    ),
+                )
+                return response
+            except APIError as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
+                    wait_time = (attempt + 1) * 15
+                    print(f"⚠️ Quota hit on {model_id}. Retrying in {wait_time}s... (Attempt {attempt + 1}/{retries})")
+                    time.sleep(wait_time)
+                else:
+                    print(f"API error on {model_id}: {e}")
+                    break
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+                break
+    return None
+
+
 def run_pipeline():
     # Step A: Check upcoming economic calendar events
     check_economic_calendar()
 
-    # Step B: Gather breaking news from Finnhub & RSS feeds
+    # Step B: Gather breaking news (1 from Finnhub, 1 from RSS)
     all_news = fetch_finnhub_news()
 
     for feed_url in RSS_FEEDS:
         try:
             feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:2]:  # Limit to top 2 items per RSS feed
+            for entry in feed.entries[:1]:
                 all_news.append(
                     {
                         "title": entry.title,
@@ -181,36 +213,26 @@ def run_pipeline():
         except Exception as e:
             print(f"Error reading RSS feed {feed_url}: {e}")
 
-    # Step C: Evaluate each item via Gemini AI and dispatch alerts
-    for item in all_news:
+    # Step C: Evaluate items via Gemini AI (Max 2 items per run)
+    for item in all_news[:2]:
         title = item["title"]
         summary = item["summary"]
         source = item["source"]
 
         prompt = f"Source: {source}\nTitle: {title}\nSummary: {summary}"
 
-        try:
-            # Active stable model string for google-genai SDK
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION,
-                    response_mime_type="application/json",
-                ),
-            )
+        response = generate_with_retry(prompt)
+        if response and response.text:
+            try:
+                ai_eval = json.loads(response.text)
+                send_news_alert(title, source, ai_eval)
+                print(f"✅ Successfully processed & sent: {title}")
+            except Exception as e:
+                print(f"❌ JSON parsing error for '{title}': {e}")
+        else:
+            print(f"⏩ Skipped '{title}' due to API quota exhaustion.")
 
-            ai_eval = json.loads(response.text)
-
-            # Dispatch alert to Telegram
-            send_news_alert(title, source, ai_eval)
-            print(f"✅ Successfully processed & sent: {title}")
-
-        except Exception as e:
-            print(f"❌ Error processing item '{title}': {e}")
-
-        # Pause 6 seconds to stay safely within free rate limits
-        time.sleep(6)
+        time.sleep(10)
 
 
 if __name__ == "__main__":
